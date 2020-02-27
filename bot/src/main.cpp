@@ -3,18 +3,39 @@
 // --- Constants ---
 // - Pins
 const int PIN_LED = 13;
-const int PIN_LINE_IN = 14;
+
+const int PIN_LINE_LEFT = 14;
+const int PIN_LINE_RIGHT = 15;
+
 const int PIN_IR_IN = 16;
 const int PIN_IR_OUT = 20;
 
-// - Intervals
-// 1 Hz
-const int INTERVAL_DEBUG = 1000000;
-// 5 KHz
-const int INTERVAL_SAMPLE = 200;
+const int PIN_MOTOR_LEFT_FWD = 1;
+const int PIN_MOTOR_LEFT_REV = 3;
+const int PIN_MOTOR_LEFT_PWM = 4;
+
+const int PIN_MOTOR_RIGHT_FWD = 8;
+const int PIN_MOTOR_RIGHT_REV = 9;
+const int PIN_MOTOR_RIGHT_PWM = 10;
+
+// - Intervals and frequencies
+const int INTERVAL_DEBUG = 1000000;  // 1 Hz
+const int INTERVAL_SAMPLE = 200;  // 5 KHz
+const int FREQ_PWM = 450;
 
 // - Other
 const float GAIN = 0.888;
+const float IR_THRESH = 20.0;
+
+const int TAPE_NUM_BASELINES = 10;
+const int TAPE_DELAY_BASELINE = 10;  // 10 ms
+const int TAPE_REL_THRESH = 0.5;  // 50 %
+
+
+// - Debug mode states
+const int DEBUG_IR_MODE = false;
+const int DEBUG_TAPE_MODE = false;
+const int DEBUG_MOTOR_MODE = true;
 
 
 // --- Module variables ---
@@ -23,15 +44,16 @@ IntervalTimer debugTimer;  // Timer for printing out debug information
 IntervalTimer sampleTimer;
 
 // - Sensors
-int lineThresh = 0;  // Threshold for line sensor (tape detection)
+float lineThresh = 0;  // Threshold for line sensor (tape detection)
 float curIROut = 0;
 float lastIROut = 0;
 float curIRIn = 0;
 float lastIRIn = 0;
 
 // - States
-int onTape = false;  // Currently touching tape
 int onIR = false;
+int stateMotorForward = true; 
+
 
 // --- Prototypes ---
 void printDebug(void);
@@ -44,29 +66,49 @@ void sampleSensors(void);
  */
 void setup() {
   // Initialize serial
-  // Serial.begin(9600);
-  // while (!Serial);
-  // Serial.println("Serial initialized.");
+  Serial.begin(9600);
+  while (!Serial);
+  Serial.println("Serial initialized.");
 
   // Initialize pins
   analogReadResolution(10);
+  analogWriteResolution(10);
 
   // - LED on
   pinMode(PIN_LED, OUTPUT);
   digitalWrite(PIN_LED, HIGH);
 
   // - Input, line sensor
-  pinMode(PIN_LINE_IN, INPUT);
-  for (int i = 0; i < 10; i++) {
-    delay(10);
-    lineThresh += analogRead(PIN_LINE_IN);
+  pinMode(PIN_LINE_LEFT, INPUT);
+  pinMode(PIN_LINE_RIGHT, INPUT);
+  for (int i = 0; i < TAPE_NUM_BASELINES; i++) {
+    delay(TAPE_DELAY_BASELINE);
+    lineThresh += analogRead(PIN_LINE_LEFT);
   }
-  lineThresh = lineThresh / 10 / 2;  // TODO make 5 a constant
-  // Serial.println(lineThresh);
+  Serial.println(lineThresh);  // TODO debug this
+  lineThresh = (lineThresh / TAPE_NUM_BASELINES) / 2;
+  Serial.print("Line threshold: ");
+  Serial.println(lineThresh);
 
   // - Input, IR sensor
   pinMode(PIN_IR_IN, INPUT);
-  pinMode(PIN_IR_OUT, OUTPUT);
+
+  // - Motors
+  pinMode(PIN_MOTOR_LEFT_FWD, OUTPUT);
+  digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
+  pinMode(PIN_MOTOR_LEFT_REV, OUTPUT);
+  digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
+  pinMode(PIN_MOTOR_LEFT_PWM, OUTPUT);
+  analogWriteFrequency(PIN_MOTOR_LEFT_PWM, FREQ_PWM);
+  analogWrite(PIN_MOTOR_LEFT_PWM, 100);
+
+  pinMode(PIN_MOTOR_RIGHT_FWD, OUTPUT);
+  digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
+  pinMode(PIN_MOTOR_RIGHT_REV, OUTPUT);
+  digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
+  pinMode(PIN_MOTOR_RIGHT_PWM, OUTPUT);
+  analogWriteFrequency(PIN_MOTOR_RIGHT_PWM, FREQ_PWM);
+  analogWrite(PIN_MOTOR_LEFT_PWM, 100);
 
   // Set up timers
   debugTimer.begin(printDebug, INTERVAL_DEBUG);  // Debug timer
@@ -78,23 +120,17 @@ void setup() {
  * Check events and respond with services.
  */
 void loop() {
-  // Event: entering tape
-  if (!onTape && analogRead(PIN_LINE_IN) < lineThresh) {
-    onTape = true;
-    // Serial.println("Now touching tape");
+  if (DEBUG_TAPE_MODE) {
+    // Event: left tape sensor triggered
+    if (analogRead(PIN_LINE_LEFT) < lineThresh) {
+      Serial.println("Left tape sensor trigger. Reverse clockwise.");
+    }
   }
 
-  // Event: leaving tape
-  if (onTape && analogRead(PIN_LINE_IN) > lineThresh) {
-    onTape = false;
-    // Serial.println("Now leaving tape");
-  }
-
-  // Event: facing IR sensor
-  if (!onIR && curIROut > 20.0) {
-    onIR = 1;
-    digitalWrite(PIN_IR_OUT, HIGH);
-  }
+  // Event: right tape sensor triggered
+  // if (analogRead(PIN_LINE_RIGHT) < lineThresh) {
+  //   Serial.println("Right tape sensor trigger. Reverse counterclockwise.");
+  // }
 }
 
 
@@ -108,11 +144,9 @@ void sampleSensors() {
   curIROut = GAIN * lastIROut + GAIN * (curIRIn - lastIRIn);
 
   // // Output outputs
-  // if (curIROut > 15.0) {
-  //   digitalWrite(PIN_IR_OUT, 1);
-  // } else {
-  //   digitalWrite(PIN_IR_OUT, 0);
-  // }
+  if (curIROut > IR_THRESH) {
+    onIR = true;
+  }
 }
 
 
@@ -120,18 +154,44 @@ void sampleSensors() {
  * Print out relevant debugging information
  */
 void printDebug() {
-  // Read line sensor input
-  // int x = analogRead(PIN_LINE_IN);
-  // if (x > lineThresh / 2) {
-  //   Serial.print("high :");
-  // } else {
-  //   Serial.print("low : ");
-  // }
-  // Serial.println(x);
+  if (DEBUG_IR_MODE) {
+    // Read IR sensor input
+    if (onIR) {
+      Serial.println("IR - activated");
+    } else {
+      Serial.println("IR - not activated");
+    }
+    onIR = false;
+  }
+  
 
-  // Read IR sensor input
-  // Serial.print("IR sensor - ");
-  // Serial.println(analogRead(PIN_IR_IN));
-  //Serial.print("curIROut - ");
-  //Serial.println(curIROut);
+  if (DEBUG_TAPE_MODE) {
+    // Print tape sensor output
+    Serial.print("Left tape sensor: ");
+    Serial.println(analogRead(PIN_LINE_LEFT));
+  }
+
+  
+  if (DEBUG_MOTOR_MODE) {
+    // Currently in forward state, switch to reverse
+    if (stateMotorForward) {
+      digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
+      digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
+
+      digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
+      digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
+
+      stateMotorForward = false;
+
+    // Currently in reverse state, switch to forward
+    } else { 
+      digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
+      digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
+
+      digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
+      digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
+
+      stateMotorForward = true;
+    }
+  }
 }
