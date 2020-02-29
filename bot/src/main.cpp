@@ -8,7 +8,6 @@ const int PIN_LINE_LEFT = 14;
 const int PIN_LINE_RIGHT = 15;
 
 const int PIN_IR_IN = 16;
-const int PIN_IR_OUT = 20;
 
 const int PIN_MOTOR_LEFT_FWD = 1;
 const int PIN_MOTOR_LEFT_REV = 3;
@@ -53,11 +52,14 @@ float lastIRIn = 0;
 // - States
 int onIR = false;
 int stateMotorForward = true; 
+int motorHigh = true;
 
 
 // --- Prototypes ---
 void printDebug(void);
 void sampleSensors(void);
+void driveForward(void);
+void rotateClockwiseR(void);
 
 // TODO debug teensy overheating (or perhaps serial nonsense)
 
@@ -67,7 +69,7 @@ void sampleSensors(void);
 void setup() {
   // Initialize serial
   Serial.begin(9600);
-  while (!Serial);
+  // while (!Serial);
   Serial.println("Serial initialized.");
 
   // Initialize pins
@@ -95,20 +97,16 @@ void setup() {
 
   // - Motors
   pinMode(PIN_MOTOR_LEFT_FWD, OUTPUT);
-  digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
   pinMode(PIN_MOTOR_LEFT_REV, OUTPUT);
-  digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
   pinMode(PIN_MOTOR_LEFT_PWM, OUTPUT);
   analogWriteFrequency(PIN_MOTOR_LEFT_PWM, FREQ_PWM);
-  analogWrite(PIN_MOTOR_LEFT_PWM, 100);
-
+  
   pinMode(PIN_MOTOR_RIGHT_FWD, OUTPUT);
-  digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
   pinMode(PIN_MOTOR_RIGHT_REV, OUTPUT);
-  digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
   pinMode(PIN_MOTOR_RIGHT_PWM, OUTPUT);
   analogWriteFrequency(PIN_MOTOR_RIGHT_PWM, FREQ_PWM);
-  analogWrite(PIN_MOTOR_LEFT_PWM, 100);
+
+  rotateClockwiseR();
 
   // Set up timers
   debugTimer.begin(printDebug, INTERVAL_DEBUG);  // Debug timer
@@ -124,6 +122,17 @@ void loop() {
     // Event: left tape sensor triggered
     if (analogRead(PIN_LINE_LEFT) < lineThresh) {
       Serial.println("Left tape sensor trigger. Reverse clockwise.");
+    }
+  }
+
+  if (Serial.available()) {
+    Serial.read();
+    if (motorHigh == true) {
+      analogWrite(PIN_MOTOR_RIGHT_PWM, 500);
+      motorHigh = false;
+    } else {
+      analogWrite(PIN_MOTOR_RIGHT_PWM, 1000);
+      motorHigh = true;
     }
   }
 
@@ -147,6 +156,30 @@ void sampleSensors() {
   if (curIROut > IR_THRESH) {
     onIR = true;
   }
+}
+
+void driveForward() {
+  // Left wheel -- forward
+  digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
+  digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
+  analogWrite(PIN_MOTOR_LEFT_PWM, 1000);
+
+  // Right wheel -- forward
+  digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
+  digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
+  analogWrite(PIN_MOTOR_RIGHT_PWM, 1000);
+}
+
+
+void rotateClockwiseR() {
+  // Left wheel - stationary
+  digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
+  digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
+
+  // Right wheel - backwards
+  digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
+  digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
+  analogWrite(PIN_MOTOR_RIGHT_PWM, 1000);
 }
 
 
@@ -174,24 +207,24 @@ void printDebug() {
   
   if (DEBUG_MOTOR_MODE) {
     // Currently in forward state, switch to reverse
-    if (stateMotorForward) {
-      digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
-      digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
+    // if (stateMotorForward) {
+    //   digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
+    //   digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
 
-      digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
-      digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
+    //   digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
+    //   digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
 
-      stateMotorForward = false;
+    //   stateMotorForward = false;
 
-    // Currently in reverse state, switch to forward
-    } else { 
-      digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
-      digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
+    // // Currently in reverse state, switch to forward
+    // } else { 
+    //   digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
+    //   digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
 
-      digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
-      digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
+    //   digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
+    //   digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
 
-      stateMotorForward = true;
-    }
+    //   stateMotorForward = true;
+    // }
   }
 }
