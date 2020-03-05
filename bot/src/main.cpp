@@ -4,8 +4,7 @@
 
 
 // TODO
-// - Integrate tape sensor state
-
+// - Reduce line adjusting state to two states (instead of 4)
 
 
 // Event: right tape sensor triggered
@@ -18,10 +17,14 @@
 // --- Enumerated types ---
 enum State {
   FINDING_BEACON,
-  ATTACKING_LEFT,
+  LEFT_ATTACKING,
+  LEFT_OUTER_ADJUST,
+  LEFT_INNER_ADJUST,
   REVERSING,
   ROTATING,
-  ATTACKING_RIGHT,
+  RIGHT_ATTACKING,
+  RIGHT_OUTER_ADJUST,
+  RIGHT_INNER_ADJUST,
   STOPPED
 };
 
@@ -30,8 +33,8 @@ enum State {
 // Pins
 const int PIN_LED = 13;
 
-const int PIN_LINE_LEFT = 14;
-const int PIN_LINE_RIGHT = 15;
+const int PIN_LINE_LEFT = 21;
+const int PIN_LINE_RIGHT = 19;
 
 const int PIN_IR_IN = 16;
 
@@ -52,11 +55,12 @@ const int FREQ_PWM = 450;
 const float GAIN = 0.888;
 const float IR_THRESH = 10.0;
 const float INTEGRAL_GAIN = 0.99;
+const float IR_SUM_THRESH = 35.0;
 
 // Tape sensor
 const int TAPE_NUM_BASELINES = 10;
 const int TAPE_DELAY_BASELINE = 10;  // 10 ms
-const int TAPE_REL_THRESH = 0.5;  // 50 %
+const float TAPE_REL_THRESH = 0.8;  // 50 %
 
 // Motor
 const int MOTOR_POWER_FULL = 1023;
@@ -64,7 +68,7 @@ const int MOTOR_POWER_HALF = 500;
 const int MOTOR_POWER_ROTATE = 800;
 
 // Debug mode --- set to false for competitions and demonstrations
-const int DEBUG_MODE = false;
+const int DEBUG_MODE = true;
 
 
 // --- Prototypes ---
@@ -79,16 +83,21 @@ void driveForwardL(void);
 void driveForwardR(void);
 void driveReverseL(void);
 void rotateClockwiseR(void);
+void adjustReverseLeft(void);
+void adjustReverseRight(void);
 
 
 // --- Module variables ---
 // Timers
 IntervalTimer debugTimer;  // Timer for printing out debug information
 IntervalTimer sampleTimer;  // Timer for IR sensor sampling
-Metro stateMetro = Metro(100);
+Metro stateMetro = Metro(100);  // Timer for state transitions
+Metro adjustMetro = Metro(100);  // Timer for tape sensor adjustments
 
 // Sensors
-float lineThresh = 0;  // Threshold for line sensor (tape detection)
+float lineThreshLeft = 0;  // Threshold for line sensor (tape detection)
+float lineThreshRight = 0;
+
 float curIRSum = 0;
 float lastIRSum = 0;
 
@@ -97,7 +106,6 @@ float lastIROut = 0;
 
 float curIRIn = 0;
 float lastIRIn = 0;
-
 
 // States
 State state = FINDING_BEACON;
@@ -109,6 +117,7 @@ State state = FINDING_BEACON;
 void setup() {
   if (DEBUG_MODE) {
     Serial.begin(9600);
+    while (!Serial);
     Serial.println("Serial initialized.");
   }
   
@@ -134,22 +143,25 @@ void setup() {
 
 
 void setupSensors() {
-  // Line sensor
   pinMode(PIN_LINE_LEFT, INPUT);
   pinMode(PIN_LINE_RIGHT, INPUT);
+  pinMode(PIN_IR_IN, INPUT);
+
+  // Line senor calibration  
   for (int i = 0; i < TAPE_NUM_BASELINES; i++) {
     delay(TAPE_DELAY_BASELINE);
-    lineThresh += analogRead(PIN_LINE_LEFT);
+    lineThreshLeft += analogRead(PIN_LINE_LEFT);
+    lineThreshRight += analogRead(PIN_LINE_RIGHT);
   }
-  lineThresh = (lineThresh / TAPE_NUM_BASELINES) / 2;
+  lineThreshLeft = TAPE_REL_THRESH * (lineThreshLeft / TAPE_NUM_BASELINES);
+  lineThreshRight = TAPE_REL_THRESH * (lineThreshRight / TAPE_NUM_BASELINES);
 
   if (DEBUG_MODE) {
-    Serial.print("Line threshold: ");
-    Serial.println(lineThresh);
+    Serial.print("Left line threshold: ");
+    Serial.println(lineThreshLeft);
+    Serial.print("Right line threshold: ");
+    Serial.println(lineThreshRight);
   }
-
-  // IR sensor
-  pinMode(PIN_IR_IN, INPUT);
 }
 
 
@@ -172,24 +184,44 @@ void setupMotors() {
  * Check events and respond with services.
  */
 void loop() {
-  // Event: IR sensor triggered from findingBeacon state
-  // Service: Move to drive forward state (with left motor overpowered)
-  if ((state == FINDING_BEACON) && (curIRSum > 35.0)) {
+  // IR sensor triggered while finding beacon
+  // ---> Attack left wall
+  if ((state == FINDING_BEACON) && (curIRSum > IR_SUM_THRESH)) {
     driveForwardL();
-    state = ATTACKING_LEFT;
+    state = LEFT_ATTACKING;
     stateMetro.interval(7.5 * 1000);
     stateMetro.reset();
   }
 
-  // Event: timer expired from attackingLeftWall state
-  // Service: Move to reverse state
-  if ((state == ATTACKING_LEFT) && stateMetro.check()) {
+  // Left tape sensor goes off (hit outer edge)
+  if ((state == LEFT_ATTACKING) && analogRead(PIN_LINE_LEFT) > lineThreshLeft) {
+    adjustReverseRight();
+    state = LEFT_OUTER_ADJUST;
+    adjustMetro.interval(1 * 1000);
+    adjustMetro.reset();
+  }
+  // Right tape sensor goes off (hit inner edge)
+  if ((state == LEFT_ATTACKING) && analogRead(PIN_LINE_RIGHT) > lineThreshRight) {
+    adjustReverseLeft();
+    state = LEFT_INNER_ADJUST;
+    adjustMetro.interval(1 * 1000);
+    adjustMetro.reset();
+  }
+  // Return to left attack
+  if ((state == LEFT_INNER_ADJUST || state == LEFT_OUTER_ADJUST) 
+      && adjustMetro.check()) {
+    driveForwardL();
+    state = LEFT_ATTACKING;
+  }
+
+  // Timer expired, move to reverse
+  if ((state == LEFT_ATTACKING) && stateMetro.check()) {
     driveReverseL();
     state = REVERSING;
     stateMetro.interval(2 * 1000);
     stateMetro.reset();
   }
-
+  // Timer expired, move to rotating
   if ((state == REVERSING) && stateMetro.check()) {
     rotateClockwiseR();
     state = ROTATING;
@@ -197,14 +229,36 @@ void loop() {
     stateMetro.reset();
   }
 
+  // Timer expired, move to left attack
   if ((state == ROTATING) && stateMetro.check()) {
     driveForwardR();
-    state = ATTACKING_RIGHT;
+    state = RIGHT_ATTACKING;
     stateMetro.interval(15 * 1000);
     stateMetro.reset();
   }
 
-  if ((state == ATTACKING_RIGHT) && stateMetro.check()) {
+  // Left tape sensor goes off (hit inner edge)
+  if ((state == RIGHT_ATTACKING) && analogRead(PIN_LINE_LEFT) > lineThreshLeft) {
+    adjustReverseRight();
+    state = RIGHT_INNER_ADJUST;
+    adjustMetro.interval(1 * 1000);
+    adjustMetro.reset();
+  }
+  // Right tape sensor goes off (hit outer edge)
+  if ((state == RIGHT_ATTACKING) && analogRead(PIN_LINE_RIGHT) > lineThreshRight) {
+    adjustReverseLeft();
+    state = RIGHT_OUTER_ADJUST;
+    adjustMetro.interval(1 * 1000);
+    adjustMetro.reset();
+  }
+  if ((state == RIGHT_OUTER_ADJUST || state == RIGHT_INNER_ADJUST) 
+      && adjustMetro.check()) {
+    driveForwardR();
+    state = RIGHT_ATTACKING;
+  }
+
+  // Final timer goes off, stop // TODO make this timer longer
+  if ((state == RIGHT_ATTACKING) && stateMetro.check()) {
     stopMotors();
     state = STOPPED;
     // Et fini.
@@ -281,6 +335,32 @@ void rotateClockwiseR() {
 }
 
 
+void adjustReverseLeft() {
+  // Left wheel - reverse
+  digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
+  digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
+  analogWrite(PIN_MOTOR_LEFT_PWM, MOTOR_POWER_FULL);
+
+  // Right wheel - reverse, half power
+  digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
+  digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
+  analogWrite(PIN_MOTOR_RIGHT_PWM, MOTOR_POWER_HALF);
+}
+
+
+void adjustReverseRight() {
+  // Left wheel - reverse, half power
+  digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
+  digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
+  analogWrite(PIN_MOTOR_LEFT_PWM, MOTOR_POWER_HALF);
+
+  // Right wheel - reverse
+  digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
+  digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
+  analogWrite(PIN_MOTOR_RIGHT_PWM, MOTOR_POWER_FULL);
+}
+
+
 void stopMotors() {
   // Left wheel - stationary
   digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
@@ -301,8 +381,22 @@ void printDebug() {
   Serial.println(curIRSum);
 
   // Print tape sensor output
+  float tapeVal = analogRead(PIN_LINE_LEFT);
   Serial.print("Left tape sensor: ");
-  Serial.println(analogRead(PIN_LINE_LEFT));
+  Serial.print(tapeVal);
+  if (tapeVal > lineThreshLeft) {
+    Serial.println(" (HIGH)");
+  } else {
+    Serial.println(" (low)");
+  }
+
+  tapeVal = analogRead(PIN_LINE_RIGHT);
   Serial.print("Right tape sensor: ");
-  Serial.println(analogRead(PIN_LINE_RIGHT));
+  Serial.print(tapeVal);
+  if (tapeVal > lineThreshRight) {
+    Serial.println(" (HIGH)");
+  } else {
+    Serial.println(" (low)");
+  }
+
 }
