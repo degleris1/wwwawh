@@ -72,7 +72,7 @@ const int MOTOR_POWER_HALF = 500;
 const int MOTOR_POWER_ROTATE = 800;
 
 // Debug mode --- set to false for competitions and demonstrations
-const int DEBUG_MODE = true;
+const int DEBUG_MODE = false;
 
 
 // --- Prototypes ---
@@ -277,11 +277,13 @@ void sampleSensors() {
   }
 }
 
+
 void driveForwardL() {
   // Left wheel -- forward
   // Right wheel -- forward, half
   setMotors(MOTOR_FWD, MOTOR_POWER_FULL, MOTOR_FWD, MOTOR_POWER_HALF);
 }
+
 
 void driveForwardR() {
   // Left wheel -- forward, half
