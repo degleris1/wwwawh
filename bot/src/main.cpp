@@ -17,14 +17,15 @@
 // --- Enumerated types ---
 enum State {
   FINDING_BEACON,
+
   LEFT_ATTACKING,
-  LEFT_OUTER_ADJUST,
-  LEFT_INNER_ADJUST,
   REVERSING,
   ROTATING,
   RIGHT_ATTACKING,
-  RIGHT_OUTER_ADJUST,
-  RIGHT_INNER_ADJUST,
+
+  ADJUSTING_RIGHT,
+  ADJUSTING_LEFT,
+
   STOPPED
 };
 
@@ -63,6 +64,9 @@ const int TAPE_DELAY_BASELINE = 10;  // 10 ms
 const float TAPE_REL_THRESH = 0.8;  // 50 %
 
 // Motor
+const int MOTOR_FWD = 1;
+const int MOTOR_REV = -1;
+const int MOTOR_STILL = 0;
 const int MOTOR_POWER_FULL = 1023;
 const int MOTOR_POWER_HALF = 500;
 const int MOTOR_POWER_ROTATE = 800;
@@ -78,6 +82,7 @@ void setupSensors(void);
 void printDebug(void);
 void sampleSensors(void);
 
+void setMotors(int, int, int, int);
 void stopMotors(void);
 void driveForwardL(void);
 void driveForwardR(void);
@@ -109,6 +114,7 @@ float lastIRIn = 0;
 
 // States
 State state = FINDING_BEACON;
+State returnState = RIGHT_ATTACKING;
 
 
 /**
@@ -192,28 +198,6 @@ void loop() {
     stateMetro.interval(7.5 * 1000);
     stateMetro.reset();
   }
-
-  // Left tape sensor goes off (hit outer edge)
-  if ((state == LEFT_ATTACKING) && analogRead(PIN_LINE_LEFT) > lineThreshLeft) {
-    adjustReverseRight();
-    state = LEFT_OUTER_ADJUST;
-    adjustMetro.interval(1 * 1000);
-    adjustMetro.reset();
-  }
-  // Right tape sensor goes off (hit inner edge)
-  if ((state == LEFT_ATTACKING) && analogRead(PIN_LINE_RIGHT) > lineThreshRight) {
-    adjustReverseLeft();
-    state = LEFT_INNER_ADJUST;
-    adjustMetro.interval(1 * 1000);
-    adjustMetro.reset();
-  }
-  // Return to left attack
-  if ((state == LEFT_INNER_ADJUST || state == LEFT_OUTER_ADJUST) 
-      && adjustMetro.check()) {
-    driveForwardL();
-    state = LEFT_ATTACKING;
-  }
-
   // Timer expired, move to reverse
   if ((state == LEFT_ATTACKING) && stateMetro.check()) {
     driveReverseL();
@@ -228,40 +212,49 @@ void loop() {
     stateMetro.interval(2.5 * 1000);
     stateMetro.reset();
   }
-
   // Timer expired, move to left attack
   if ((state == ROTATING) && stateMetro.check()) {
     driveForwardR();
     state = RIGHT_ATTACKING;
-    stateMetro.interval(15 * 1000);
+    stateMetro.interval(100 * 1000);  // TODO make a full 2:10
     stateMetro.reset();
   }
-
-  // Left tape sensor goes off (hit inner edge)
-  if ((state == RIGHT_ATTACKING) && analogRead(PIN_LINE_LEFT) > lineThreshLeft) {
-    adjustReverseRight();
-    state = RIGHT_INNER_ADJUST;
-    adjustMetro.interval(1 * 1000);
-    adjustMetro.reset();
-  }
-  // Right tape sensor goes off (hit outer edge)
-  if ((state == RIGHT_ATTACKING) && analogRead(PIN_LINE_RIGHT) > lineThreshRight) {
-    adjustReverseLeft();
-    state = RIGHT_OUTER_ADJUST;
-    adjustMetro.interval(1 * 1000);
-    adjustMetro.reset();
-  }
-  if ((state == RIGHT_OUTER_ADJUST || state == RIGHT_INNER_ADJUST) 
-      && adjustMetro.check()) {
-    driveForwardR();
-    state = RIGHT_ATTACKING;
-  }
-
-  // Final timer goes off, stop // TODO make this timer longer
+  // Final timer goes off, stop
   if ((state == RIGHT_ATTACKING) && stateMetro.check()) {
     stopMotors();
     state = STOPPED;
     // Et fini.
+  }
+
+
+  // Tape sensing logic
+  // Left tape sensor goes off
+  if ((state == RIGHT_ATTACKING || state == LEFT_ATTACKING) 
+      && analogRead(PIN_LINE_LEFT) > lineThreshLeft) {
+    adjustReverseRight();
+    returnState = state;
+    state = ADJUSTING_RIGHT;
+    adjustMetro.interval(1 * 1000);
+    adjustMetro.reset();
+  }
+  // Right tape sensor goes off (hit outer edge)
+  if ((state == RIGHT_ATTACKING || state == LEFT_ATTACKING) 
+      && analogRead(PIN_LINE_RIGHT) > lineThreshRight) {
+    adjustReverseLeft();
+    returnState = state;
+    state = ADJUSTING_LEFT;
+    adjustMetro.interval(1 * 1000);
+    adjustMetro.reset();
+  }
+  // Return to state
+  if ((state == ADJUSTING_LEFT || state == ADJUSTING_RIGHT) 
+      && adjustMetro.check()) {
+    if (returnState == LEFT_ATTACKING) {
+      driveForwardL();
+    } else {  // returnState == RIGHT_ATTACKING
+      driveForwardR();
+    }  
+    state = returnState;
   }
 }
 
@@ -286,89 +279,76 @@ void sampleSensors() {
 
 void driveForwardL() {
   // Left wheel -- forward
-  digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
-  digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
-  analogWrite(PIN_MOTOR_LEFT_PWM, MOTOR_POWER_FULL);
-
   // Right wheel -- forward, half
-  digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
-  digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
-  analogWrite(PIN_MOTOR_RIGHT_PWM, MOTOR_POWER_HALF);
+  setMotors(MOTOR_FWD, MOTOR_POWER_FULL, MOTOR_FWD, MOTOR_POWER_HALF);
 }
 
 void driveForwardR() {
   // Left wheel -- forward, half
-  digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
-  digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
-  analogWrite(PIN_MOTOR_LEFT_PWM, MOTOR_POWER_FULL);
-
   // Right wheel -- forward
-  digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
-  digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
-  analogWrite(PIN_MOTOR_RIGHT_PWM, MOTOR_POWER_FULL);
+  setMotors(MOTOR_FWD, MOTOR_POWER_FULL, MOTOR_FWD, MOTOR_POWER_FULL);
 }
 
 
 void driveReverseL() {
   // Left wheel -- reverse
-  digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
-  analogWrite(PIN_MOTOR_LEFT_PWM, MOTOR_POWER_FULL);
-
   // Right wheel -- reverse, half
-  digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
-  analogWrite(PIN_MOTOR_RIGHT_PWM, MOTOR_POWER_HALF);
+  setMotors(MOTOR_REV, MOTOR_POWER_FULL, MOTOR_REV, MOTOR_POWER_HALF);
 }
 
 
 void rotateClockwiseR() {
   // Left wheel - forwards
-  digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
-  digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
-  analogWrite(PIN_MOTOR_LEFT_PWM, MOTOR_POWER_ROTATE);
-
   // Right wheel - backwards
-  digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
-  analogWrite(PIN_MOTOR_RIGHT_PWM, MOTOR_POWER_ROTATE);
+  setMotors(MOTOR_FWD, MOTOR_POWER_ROTATE, MOTOR_REV, MOTOR_POWER_ROTATE);
 }
 
 
 void adjustReverseLeft() {
   // Left wheel - reverse
-  digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
-  analogWrite(PIN_MOTOR_LEFT_PWM, MOTOR_POWER_FULL);
-
   // Right wheel - reverse, half power
-  digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
-  analogWrite(PIN_MOTOR_RIGHT_PWM, MOTOR_POWER_HALF);
+  setMotors(MOTOR_REV, MOTOR_POWER_FULL, MOTOR_REV, MOTOR_POWER_HALF);
 }
 
 
 void adjustReverseRight() {
   // Left wheel - reverse, half power
-  digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
-  analogWrite(PIN_MOTOR_LEFT_PWM, MOTOR_POWER_HALF);
-
   // Right wheel - reverse
-  digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
-  analogWrite(PIN_MOTOR_RIGHT_PWM, MOTOR_POWER_FULL);
+  setMotors(MOTOR_REV, MOTOR_POWER_HALF, MOTOR_REV, MOTOR_POWER_FULL);
 }
 
 
 void stopMotors() {
-  // Left wheel - stationary
-  digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
+  setMotors(MOTOR_STILL, 0, MOTOR_STILL, 0);
+}
 
-  // Right wheel - backwards
-  digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
-  digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
+
+void setMotors(int leftDir, int leftPower, int rightDir, int rightPower) {
+  // Direction
+  if (leftDir == MOTOR_FWD) {
+    digitalWrite(PIN_MOTOR_LEFT_FWD, HIGH);
+    digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
+  } else if (leftDir == MOTOR_REV) {
+    digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
+    digitalWrite(PIN_MOTOR_LEFT_REV, HIGH);
+  } else {
+    digitalWrite(PIN_MOTOR_LEFT_FWD, LOW);
+    digitalWrite(PIN_MOTOR_LEFT_REV, LOW);
+  }
+  if (rightDir == MOTOR_FWD) {
+    digitalWrite(PIN_MOTOR_RIGHT_FWD, HIGH);
+    digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
+  } else if (rightDir == MOTOR_REV) {
+    digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
+    digitalWrite(PIN_MOTOR_RIGHT_REV, HIGH);
+  } else {
+    digitalWrite(PIN_MOTOR_RIGHT_FWD, LOW);
+    digitalWrite(PIN_MOTOR_RIGHT_REV, LOW);
+  }
+
+  // Power
+  analogWrite(PIN_MOTOR_LEFT_PWM, leftPower);
+  analogWrite(PIN_MOTOR_RIGHT_PWM, rightPower);
 }
 
 
